@@ -5,26 +5,118 @@ date: "8/28/2020"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+
+# Executive Summary
+The goal of this project is to predict the manner in which the users in the data set performed an exercise.
+The data set is quite large with 160 variables. After some data cleaning, the number of columns is reduced to 53. The response variable is the "classe" variable which has 5 factors (A, B, C, D, E). A is the correct manner, B is throwing the elbows in front, C is lifting the dumbbell halfway, D is lowering the dumbbell halfway, and E is throwing the hips to the front. The training data is used to create several prediction models (classification tree, random forest, linear discriminant model and a stacked model. The clear leader of these prediction models is the random forest with a 0.996 out of sample accuracy. This model is preferred over the stacked model even though it has an equal accuracy since it is a simpler model.  
+
+# Exploratory Analysis
+```{r load_data, echo = TRUE}
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", header = TRUE)
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", header = TRUE)
+head(training)
+plot(training$classe)
+str(training)
+
 ```
+  
+# Process/Clean Data
+Since we need to be able to test the model prior to the submission of this project, the training set will be split into another train/test subset of the data with 70% in the train set and 30% in the test set.  
 
-## R Markdown
+Before doing that the data should be cleaned up.A lot of variables have NA values in their columns. To simplify the data set, those columns with NAs will be removed. Upon review of the training data, the first 5 columns should not be important in predicting the classe variable so those will be removed from the data set.  These include time stamps and identification of subjects.  Additionally, the near zero variance columns will be removed.
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+While we are reviewing the data lets look at a correlation plot.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r, echo = TRUE, warning = FALSE, message = FALSE}
+library(rpart)
+library(caret)
+library(randomForest)
+library(rattle)
+library(gbm)
+training_clean <- training[,colSums(is.na(training))==0]
+testing_clean <- testing[,colSums(is.na(training))==0]
+training_clean <- training_clean[,-c(1:5)]
+testing_clean <- testing_clean[,-c(1:5)]
+set.seed(55555)
+new_inTrain <- createDataPartition(training_clean$classe, p =0.7, list = FALSE)
+new_training <- training_clean[new_inTrain,]
+train_testing <- training_clean[-new_inTrain,]
+NZV <- nearZeroVar(new_training)
+new_training <- new_training[,-NZV]
+train_testing<- train_testing[,-NZV]
+dim(new_training)
+dim(train_testing)
 ```
+  
+# Train Models
+To begin with, a classification tree, random forest, and a linear discriminant analysis model will be created.
+```{r, echo = TRUE, , warning = FALSE, message = FALSE}
+set.seed(44444)
+rpart_mod <- train(classe ~., data = new_training, method = "rpart")
+fancyRpartPlot(rpart_mod$finalModel)
+rf_mod <- randomForest(classe ~., data = new_training, trControl = trainControl(method="cv"), number = 3, verboseIter = FALSE)
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+lda_mod <- train(classe ~., data = new_training, method = "lda", verbose = FALSE)
 ```
+  
+After training the models, the accuracy on the model will be assessed on the training data itself. Afterwards, the models will be assessed for accuracy on the portion of the training set that was set aside for cross validation.
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# Accuracy on Training Set 
+```{r, echo = TRUE, warning = FALSE, message = FALSE}
+
+pred_rpart <- predict(rpart_mod, newdata = new_training)
+confusionMatrix(pred_rpart, new_training$classe)$overall[1]
+
+
+pred_rf <- predict(rf_mod, newdata = new_training)
+confusionMatrix(pred_rf, new_training$classe)$overall[1]
+
+pred_lda <- predict(lda_mod, newdata = new_training)
+confusionMatrix(pred_lda, new_training$classe)$overall[1]
+
+predDF <- data.frame(pred_rf,pred_rpart, pred_lda,classe = new_training$classe)
+combModFit <- train(classe~., method = "rf", data = predDF,trControl = trainControl(method="cv"), number = 3, verboseIter = FALSE)
+
+combPred <- predict(combModFit , predDF)
+
+confusionMatrix(combPred,new_training$classe)$overall[1]
+```
+  
+This demonstrates that the random forest and stacked model has the highest accuracy on the training set. The random forest model most likely explains the entire stacked model.  
+        - Classification Tree: 0.496  
+        - Random Forest: 1  
+        - Linear Discriminant Analysis: 0.718  
+        - Stacked: 1  
+        
+  
+# Cross Validation
+```{r, echo = TRUE, warning = FALSE, message = FALSE}
+
+pred_rpart <- predict(rpart_mod, newdata = train_testing)
+confusionMatrix(pred_rpart, train_testing$classe)$overall[1]
+
+pred_rf <- predict(rf_mod, newdata = train_testing)
+confusionMatrix(pred_rf, train_testing$classe)$overall[1]
+
+pred_lda <- predict(lda_mod, newdata = train_testing)
+confusionMatrix(pred_lda, train_testing$classe)$overall[1]
+
+predDF <- data.frame(pred_rf,pred_rpart, pred_lda,classe = train_testing$classe)
+combModFit <- train(classe~., method = "rf", data = predDF,trControl = trainControl(method="cv"), number = 3, verboseIter = FALSE)
+combPred <- predict(combModFit , predDF)
+confusionMatrix(combPred,train_testing$classe)$overall[1]
+ggplot(train_testing, aes(classe,pred_rpart, color = classe == pred_rpart ))+geom_jitter()+ggtitle("Classification Tree Model")
+ggplot(train_testing, aes(classe,pred_lda, color = classe == pred_lda ))+geom_jitter()+ggtitle("LDA Model")
+ggplot(train_testing, aes(classe,pred_rf, color = classe == pred_rf ))+geom_jitter()+ggtitle("Random Forest Model")
+ggplot(train_testing, aes(classe,combPred, color = classe == combPred ))+geom_jitter()+ggtitle("Stacked Model")
+
+```
+  
+The plots and accuracy data demonstrates that the random forest and combined model also has the highest accuracy on the cross validation data set. The random forest model will be selected to be tested on the test subject since it is the simpler model.    
+        - Random Forest: 0.996   
+        - Linear Discriminant Analsis: 0.709  
+        - Classification Tree: 0.495  
+        - Stacked: 0.996  
+  
+
+ 
